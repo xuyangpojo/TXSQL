@@ -681,18 +681,22 @@ bool JOIN::optimize(bool finalize_access_paths) {
   */
   for (uint i = const_tables; i < tables; ++i) {
     JOIN_TAB *const tab = best_ref[i];
-    if (tab->position() && tab->join_cond()) {
-      tab->set_join_cond(substitute_for_best_equal_field(
-          thd, tab->join_cond(), tab->cond_equal, map2table));
-      if (thd->is_error()) {
-        error = 1;
-        DBUG_PRINT("error", ("Error from substitute_for_best_equal"));
-        return true;
-      }
-      tab->join_cond()->update_used_tables();
-      if (tab->join_cond())
-        tab->join_cond()->walk(&Item::cast_incompatible_args,
-                               enum_walk::POSTFIX, nullptr);
+    if (!tab->position()) continue;
+    Item *join_cond = tab->join_cond();
+    if (!join_cond) continue;
+    
+    Item *new_join_cond = substitute_for_best_equal_field(
+        thd, join_cond, tab->cond_equal, map2table);
+    if (thd->is_error()) {
+      error = 1;
+      DBUG_PRINT("error", ("Error from substitute_for_best_equal"));
+      return true;
+    }
+    tab->set_join_cond(new_join_cond);
+    if (new_join_cond) {
+      new_join_cond->update_used_tables();
+      new_join_cond->walk(&Item::cast_incompatible_args,
+                          enum_walk::POSTFIX, nullptr);
     }
   }
 
