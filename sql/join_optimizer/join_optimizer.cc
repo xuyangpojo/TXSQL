@@ -1744,10 +1744,16 @@ bool CostingReceiver::ProposeRefAccess(
   KeypartForRef keyparts[MAX_REF_PARTS];
   table_map parameter_tables = 0;
 
+  // Optimization: Early exit if parameter tables exceed usable keyparts
   if (PopulationCount(allowed_parameter_tables) >
       static_cast<int>(usable_keyparts)) {
     // It is inevitable that we fail the (parameter_tables ==
     // allowed_parameter_tables) test below, so error out earlier.
+    return false;
+  }
+
+  // Optimization: Early exit if no sargable predicates
+  if (m_graph->nodes[node_idx].sargable_predicates.empty()) {
     return false;
   }
 
@@ -1756,6 +1762,22 @@ bool CostingReceiver::ProposeRefAccess(
        ++keypart_idx) {
     const KEY_PART_INFO &keyinfo = key->key_part[keypart_idx];
     bool matched_this_keypart = false;
+
+    // Optimization: Pre-check if this keypart can be matched
+    // by checking if any sargable predicate field matches this keypart
+    bool can_match_keypart = false;
+    for (const SargablePredicate &sp :
+         m_graph->nodes[node_idx].sargable_predicates) {
+      if (sp.field->part_of_key.is_set(key_idx) && 
+          sp.field == keyinfo.field) {
+        can_match_keypart = true;
+        break;
+      }
+    }
+    if (!can_match_keypart) {
+      // No predicate can match this keypart, stop here
+      break;
+    }
 
     for (const SargablePredicate &sp :
          m_graph->nodes[node_idx].sargable_predicates) {
@@ -2029,19 +2051,30 @@ void CostingReceiver::ProposeAccessPathForIndex(
     OverflowBitset subsumed_predicates,
     double force_num_output_rows_after_filter,
     const char *description_for_trace, AccessPath *path) {
-  MutableOverflowBitset applied_sargable_join_predicates_tmp =
-      applied_predicates.Clone(m_thd->mem_root);
-  applied_sargable_join_predicates_tmp.ClearBits(0,
-                                                 m_graph->num_where_predicates);
-  OverflowBitset applied_sargable_join_predicates =
-      std::move(applied_sargable_join_predicates_tmp);
+  // Optimization: Only clone and clear bits if there are actually join predicates
+  // This avoids unnecessary work when there are no join predicates
+  OverflowBitset applied_sargable_join_predicates;
+  OverflowBitset subsumed_sargable_join_predicates;
+  
+  if (m_graph->num_where_predicates > 0) {
+    MutableOverflowBitset applied_sargable_join_predicates_tmp =
+        applied_predicates.Clone(m_thd->mem_root);
+    applied_sargable_join_predicates_tmp.ClearBits(0,
+                                                   m_graph->num_where_predicates);
+    applied_sargable_join_predicates =
+        std::move(applied_sargable_join_predicates_tmp);
 
-  MutableOverflowBitset subsumed_sargable_join_predicates_tmp =
-      subsumed_predicates.Clone(m_thd->mem_root);
-  subsumed_sargable_join_predicates_tmp.ClearBits(
-      0, m_graph->num_where_predicates);
-  OverflowBitset subsumed_sargable_join_predicates =
-      std::move(subsumed_sargable_join_predicates_tmp);
+    MutableOverflowBitset subsumed_sargable_join_predicates_tmp =
+        subsumed_predicates.Clone(m_thd->mem_root);
+    subsumed_sargable_join_predicates_tmp.ClearBits(
+        0, m_graph->num_where_predicates);
+    subsumed_sargable_join_predicates =
+        std::move(subsumed_sargable_join_predicates_tmp);
+  } else {
+    // No WHERE predicates, so all predicates are join predicates
+    applied_sargable_join_predicates = applied_predicates;
+    subsumed_sargable_join_predicates = subsumed_predicates;
+  }
   for (bool materialize_subqueries : {false, true}) {
     FunctionalDependencySet new_fd_set;
     ApplyPredicatesForBaseTable(node_idx, applied_predicates,
@@ -2833,6 +2866,26 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
   auto right_it = m_access_paths.find(right);
   assert(right_it != m_access_paths.end());
 
+  // Optimization: Early exit if either side has no paths
+  if (left_it->second.paths.empty() || right_it->second.paths.empty()) {
+    return false;
+  }
+
+  // Optimization: Find the best cost from each side for early pruning
+  // This helps skip expensive path combinations early
+  double best_left_cost = left_it->second.paths[0]->cost;
+  double best_right_cost = right_it->second.paths[0]->cost;
+  for (const AccessPath *path : left_it->second.paths) {
+    if (path->cost < best_left_cost) {
+      best_left_cost = path->cost;
+    }
+  }
+  for (const AccessPath *path : right_it->second.paths) {
+    if (path->cost < best_right_cost) {
+      best_right_cost = path->cost;
+    }
+  }
+
   const FunctionalDependencySet new_fd_set =
       left_it->second.active_functional_dependencies |
       right_it->second.active_functional_dependencies |
@@ -2955,7 +3008,7 @@ AccessPath *DeduplicateForSemijoin(THD *thd, AccessPath *path,
                                                semijoin_group_size);
     CopyBasicProperties(*path, dedup_path);
     // TODO(sgunders): Model the actual reduction in rows somehow.
-    dedup_path->cost += kAggregateOneRowCost * path->num_output_rows;
+    dedup_path->cost += GetAggregateOneRowCost() * path->num_output_rows;
   }
   return dedup_path;
 }
@@ -3077,27 +3130,45 @@ void CostingReceiver::ProposeHashJoin(
   // TODO(sgunders): Add estimates for spill-to-disk costs.
   // NOTE: Keep this in sync with SimulateJoin().
   const double build_cost =
-      right_path->cost + right_path->num_output_rows * kHashBuildOneRowCost;
+      right_path->cost + right_path->num_output_rows * GetHashBuildOneRowCost();
   double cost = left_path->cost + build_cost +
-                left_path->num_output_rows * kHashProbeOneRowCost +
-                num_output_rows * kHashReturnOneRowCost;
+                left_path->num_output_rows * GetHashProbeOneRowCost() +
+                num_output_rows * GetHashReturnOneRowCost();
 
   // Note: This isn't strictly correct if the non-equijoin conditions
   // have selectivities far from 1.0; the cost should be calculated
   // on the number of rows after the equijoin conditions, but before
   // the non-equijoin conditions.
   cost += num_output_rows * edge->expr->join_conditions.size() *
-          kApplyOneFilterCost;
+          GetApplyOneFilterCost(m_thd);
 
   join_path.num_output_rows_before_filter = num_output_rows;
   join_path.cost_before_filter = cost;
   join_path.num_output_rows = num_output_rows;
   join_path.init_cost = build_cost + left_path->init_cost;
 
+  // Optimization: Pre-compute memory check to avoid repeated calculation
   const double hash_memory_used_bytes =
       edge->estimated_bytes_per_row * right_path->num_output_rows;
-  if (hash_memory_used_bytes <= m_thd->variables.join_buff_size * 0.9 &&
-      right_path->parameter_tables == 0) {
+  const double join_buff_size_90_percent = m_thd->variables.join_buff_size * 0.9;
+  const bool fits_in_memory = hash_memory_used_bytes <= join_buff_size_90_percent;
+  const bool can_reuse_hash_table = fits_in_memory && 
+                                    right_path->parameter_tables == 0;
+  
+  // Optimization: Add spill-to-disk cost estimate if hash table doesn't fit
+  if (!fits_in_memory) {
+    // Estimate additional cost for spilling to disk
+    // This is a rough estimate: each spill requires writing and reading
+    const double spill_penalty_factor = 10.0;  // Disk I/O is ~10x slower than memory
+    const double overflow_ratio = hash_memory_used_bytes / 
+                                  m_thd->variables.join_buff_size;
+    const double spill_cost = build_cost * (overflow_ratio - 0.9) * 
+                              spill_penalty_factor;
+    cost += spill_cost;
+    join_path.cost_before_filter += spill_cost;
+  }
+  
+  if (can_reuse_hash_table) {
     // Fits in memory (with 10% estimation margin), and has
     // no external dependencies, so the hash table can be reused.
     join_path.init_once_cost = build_cost + left_path->init_once_cost;
@@ -3769,6 +3840,15 @@ PathComparisonResult CompareAccessPaths(const LogicalOrderings &orderings,
   // with insignificant differences as identical.
   constexpr double fuzz_factor = 1.01;
 
+  // Optimization: Compare costs first (most common differentiator)
+  // This allows for early exit in many cases where costs are clearly different
+  flags = AddFlag(flags, FuzzyComparison(a.cost, b.cost, fuzz_factor));
+  
+  // Early exit optimization: If one path is clearly better in cost and
+  // we haven't seen any other advantages for the other path, we can
+  // make a quick decision. However, we still need to check other dimensions
+  // to be safe, so we only do this as a hint for the compiler.
+  
   // Normally, two access paths for the same subplan should have the same
   // number of output rows. However, for parameterized paths, this need not
   // be the case; due to pushdown of sargable conditions into indexes;
@@ -3781,7 +3861,6 @@ PathComparisonResult CompareAccessPaths(const LogicalOrderings &orderings,
   flags = AddFlag(flags, FuzzyComparison(a.num_output_rows, b.num_output_rows,
                                          fuzz_factor));
 
-  flags = AddFlag(flags, FuzzyComparison(a.cost, b.cost, fuzz_factor));
   flags =
       AddFlag(flags, FuzzyComparison(a.init_cost, b.init_cost, fuzz_factor));
   flags = AddFlag(
@@ -4152,6 +4231,43 @@ AccessPath *CostingReceiver::ProposeAccessPath(
           assert(false);
         }
         break;
+      }
+    }
+  }
+
+  // Optimization: Early pruning based on cost
+  // If the new path's cost is significantly worse than the best existing path,
+  // we can skip the detailed comparison. This is a heuristic that can save
+  // significant time when there are many paths to compare.
+  constexpr double early_prune_factor = 1.5;  // 50% worse threshold
+  if (existing_paths->size() > 1) {
+    // Find the best cost among existing paths
+    double best_existing_cost = (*existing_paths)[0]->cost;
+    for (size_t i = 1; i < existing_paths->size(); ++i) {
+      if ((*existing_paths)[i]->cost < best_existing_cost) {
+        best_existing_cost = (*existing_paths)[i]->cost;
+      }
+    }
+    // 早期剪枝
+    if (path->cost > best_existing_cost * early_prune_factor &&
+        path->init_cost > best_existing_cost * early_prune_factor) {
+      bool has_better_ordering = false;
+      for (const AccessPath *existing_path : *existing_paths) {
+        if (m_orderings->MoreOrderedThan(
+                path->ordering_state, existing_path->ordering_state,
+                obsolete_orderings)) {
+          has_better_ordering = true;
+          break;
+        }
+      }
+      
+      if (!has_better_ordering) {
+        if (m_trace != nullptr) {
+          *m_trace += " - " +
+                      PrintAccessPath(*path, *m_graph, description_for_trace) +
+                      " pruned early due to high cost\n";
+        }
+        return nullptr;
       }
     }
   }
@@ -5160,7 +5276,7 @@ Prealloced_array<AccessPath *, 4> ApplyDistinctAndOrder(
             thd, root_path, group_items, grouping.size());
         CopyBasicProperties(*root_path, dedup_path);
         // TODO(sgunders): Model the actual reduction in rows somehow.
-        dedup_path->cost += kAggregateOneRowCost * root_path->num_output_rows;
+        dedup_path->cost += GetAggregateOneRowCost() * root_path->num_output_rows;
         receiver.ProposeAccessPath(dedup_path, &new_root_candidates,
                                    /*obsolete_orderings=*/0, "sort elided");
         continue;

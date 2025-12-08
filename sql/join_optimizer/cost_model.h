@@ -38,6 +38,9 @@ struct TABLE;
 // These are extremely arbitrary cost model constants. We should revise them
 // based on actual query times (possibly using linear regression?), and then
 // put them into the cost model to make them user-tunable.
+//
+// Default cost constants. These can be adjusted based on actual performance
+// measurements and hardware characteristics.
 constexpr double kApplyOneFilterCost = 0.1;
 constexpr double kAggregateOneRowCost = 0.1;
 constexpr double kSortOneRowCost = 0.1;
@@ -46,6 +49,48 @@ constexpr double kHashProbeOneRowCost = 0.1;
 constexpr double kHashReturnOneRowCost = 0.07;
 constexpr double kMaterializeOneRowCost = 0.1;
 constexpr double kWindowOneRowCost = 0.1;
+
+/**
+  Get cost constants with potential adjustments based on context.
+  This allows for future extension to support dynamic cost adjustments
+  based on hardware characteristics, workload patterns, etc.
+  
+  @param thd Thread handle (can be nullptr for default values)
+  @return Cost constant value
+*/
+inline double GetApplyOneFilterCost(THD *thd = nullptr) {
+  // TODO: In the future, this could check system variables or
+  // hardware characteristics to adjust the cost dynamically.
+  return kApplyOneFilterCost;
+}
+
+inline double GetAggregateOneRowCost(THD *thd = nullptr) {
+  return kAggregateOneRowCost;
+}
+
+inline double GetSortOneRowCost(THD *thd = nullptr) {
+  return kSortOneRowCost;
+}
+
+inline double GetHashBuildOneRowCost(THD *thd = nullptr) {
+  return kHashBuildOneRowCost;
+}
+
+inline double GetHashProbeOneRowCost(THD *thd = nullptr) {
+  return kHashProbeOneRowCost;
+}
+
+inline double GetHashReturnOneRowCost(THD *thd = nullptr) {
+  return kHashReturnOneRowCost;
+}
+
+inline double GetMaterializeOneRowCost(THD *thd = nullptr) {
+  return kMaterializeOneRowCost;
+}
+
+inline double GetWindowOneRowCost(THD *thd = nullptr) {
+  return kWindowOneRowCost;
+}
 
 /// See EstimateFilterCost.
 struct FilterCost {
@@ -84,8 +129,9 @@ inline FilterCost EstimateFilterCost(
     THD *thd, double num_rows,
     const Mem_root_array<ContainedSubquery> &contained_subqueries) {
   FilterCost cost{0.0, 0.0, 0.0};
-  cost.cost_if_not_materialized = num_rows * kApplyOneFilterCost;
-  cost.cost_if_materialized = num_rows * kApplyOneFilterCost;
+  const double filter_cost = GetApplyOneFilterCost(thd);
+  cost.cost_if_not_materialized = num_rows * filter_cost;
+  cost.cost_if_materialized = num_rows * filter_cost;
 
   for (const ContainedSubquery &subquery : contained_subqueries) {
     AddCost(thd, subquery, num_rows, &cost);

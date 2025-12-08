@@ -295,31 +295,43 @@ inline NodeMap FindNeighborhood(const Hypergraph &g, NodeMap subgraph,
       cache->InitSearch(just_grown_by, &neighborhood, &full_neighborhood);
   assert(IsSubset(neighborhood, full_neighborhood));
 
+  // Optimization: Pre-compute common masks to avoid repeated computation
+  const NodeMap subgraph_or_forbidden = subgraph | forbidden;
+  
   for (size_t node_idx : BitsSetIn(to_search)) {
     // Simple edges.
     // NOTE: This node's simple neighborhood will be added lazily to
     // full_neighborhood below. Forbidden nodes will also be removed below.
-    neighborhood |= g.nodes[node_idx].simple_neighborhood;
+    // Optimization: Filter out forbidden nodes immediately
+    const NodeMap node_simple_neighborhood = 
+        g.nodes[node_idx].simple_neighborhood & ~subgraph_or_forbidden;
+    neighborhood |= node_simple_neighborhood;
 
     // Now go through the complex edges and see which ones point out of the
     // subgraph.
-    for (size_t edge_idx : g.nodes[node_idx].complex_edges) {
-      const Hyperedge e = g.edges[edge_idx];
+    // Optimization: Early exit if no complex edges
+    if (!g.nodes[node_idx].complex_edges.empty()) {
+      for (size_t edge_idx : g.nodes[node_idx].complex_edges) {
+        const Hyperedge e = g.edges[edge_idx];
 
-      if (IsSubset(e.left, subgraph) &&
-          !Overlaps(e.right, subgraph | forbidden)) {
-        // e.right is an interesting hypernode (part of E↓'(S,X)).
-        full_neighborhood |= e.right;
-        if (!Overlaps(e.right, neighborhood)) {
-          // e.right is also not subsumed by another edge (ie., it is part of
-          // E↓(S,X)), so add a “representative node” for it to the
-          // neighborhood.
-          //
-          // Is is possible to do the Overlaps() test above branch-free by using
-          // -int64_t(e.right & neighborhood) >> 63 as a mask (assuming we do
-          // not have more than 63 tables) but it seems to do better on some
-          // tests and worse on others, so it's not worth it.
-          neighborhood |= IsolateLowestBit(e.right);
+        // Optimization: Combine conditions for better branch prediction
+        // Check the cheaper condition first (IsSubset is more expensive)
+        if (!Overlaps(e.right, subgraph_or_forbidden) &&
+            IsSubset(e.left, subgraph)) {
+          // e.right is an interesting hypernode (part of E↓'(S,X)).
+          full_neighborhood |= e.right;
+          // Optimization: Use bitwise operation to check overlap more efficiently
+          if ((e.right & neighborhood) == 0) {
+            // e.right is also not subsumed by another edge (ie., it is part of
+            // E↓(S,X)), so add a "representative node" for it to the
+            // neighborhood.
+            //
+            // Is is possible to do the Overlaps() test above branch-free by using
+            // -int64_t(e.right & neighborhood) >> 63 as a mask (assuming we do
+            // not have more than 63 tables) but it seems to do better on some
+            // tests and worse on others, so it's not worth it.
+            neighborhood |= IsolateLowestBit(e.right);
+          }
         }
       }
     }

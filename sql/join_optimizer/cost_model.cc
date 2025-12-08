@@ -94,7 +94,7 @@ void EstimateSortCost(AccessPath *path, ha_rows limit_rows) {
   double sort_cost;
   if (num_input_rows <= 1.0) {
     // Avoid NaNs from log2().
-    sort_cost = kSortOneRowCost;
+    sort_cost = GetSortOneRowCost();
   } else {
     // Filesort's complexity is O(n + k log k) with a limit, or O(n log n)
     // without. See comment in Filesort_buffer::sort_buffer(). We can use the
@@ -102,9 +102,21 @@ void EstimateSortCost(AccessPath *path, ha_rows limit_rows) {
     // than the number of input rows), O(n + k log k) is the same as
     // O(n + n log n), which is equivalent to O(n log n) because n < n log n for
     // large values of n. So we always calculate it as n + k log k:
-    sort_cost = kSortOneRowCost *
+    //
+    // Optimization: For very large sorts, we add a small penalty to account
+    // for potential disk I/O when the sort buffer is exceeded.
+    const double base_sort_cost = GetSortOneRowCost();
+    double log_factor = std::max(log2(num_output_rows), 1.0);
+    
+    // For large sorts (> 1M rows), add a small penalty for potential disk I/O
+    const double disk_io_penalty = (num_input_rows > 1000000.0) 
+        ? base_sort_cost * 0.1 * (num_input_rows / 1000000.0)
+        : 0.0;
+    
+    sort_cost = base_sort_cost *
                 (num_input_rows +
-                 num_output_rows * std::max(log2(num_output_rows), 1.0));
+                 num_output_rows * log_factor) +
+                disk_io_penalty;
   }
 
   path->num_output_rows = num_output_rows;
@@ -134,7 +146,7 @@ void AddCost(THD *thd, const ContainedSubquery &subquery, double num_rows,
         /*read_rows=*/num_rows);
     cost->cost_to_materialize +=
         subquery.path->cost +
-        kMaterializeOneRowCost * subquery.path->num_output_rows;
+        GetMaterializeOneRowCost(thd) * subquery.path->num_output_rows;
   } else {
     cost->cost_if_materialized += num_rows * subquery.path->cost;
   }
@@ -143,8 +155,39 @@ void AddCost(THD *thd, const ContainedSubquery &subquery, double num_rows,
 FilterCost EstimateFilterCost(THD *thd, double num_rows, Item *condition,
                               Query_block *outer_query_block) {
   FilterCost cost{0.0, 0.0, 0.0};
-  cost.cost_if_not_materialized = num_rows * kApplyOneFilterCost;
-  cost.cost_if_materialized = num_rows * kApplyOneFilterCost;
+  
+  // Base filter cost - can be adjusted based on condition complexity
+  double base_filter_cost = GetApplyOneFilterCost(thd);
+  
+  // Optimization: Adjust cost based on condition complexity
+  // Simple conditions (field comparisons) are cheaper than complex ones
+  // (functions, subqueries, etc.)
+  double complexity_factor = 1.0;
+  if (condition != nullptr) {
+    // Estimate complexity based on item type
+    // This is a simple heuristic - could be improved with more sophisticated
+    // analysis of the condition tree
+    // 更精细的成本计算
+    if (condition->type() == Item::FUNC_ITEM) {
+      Item_func *func = down_cast<Item_func *>(condition);
+      if (func->functype() == Item_func::EQ_FUNC ||
+          func->functype() == Item_func::LT_FUNC ||
+          func->functype() == Item_func::LE_FUNC ||
+          func->functype() == Item_func::GT_FUNC ||
+          func->functype() == Item_func::GE_FUNC) {
+        complexity_factor = 1.0;
+      } else {
+        complexity_factor = 1.5;
+      }
+    } else if (condition->type() == Item::COND_ITEM) {
+      complexity_factor = 1.2;
+    }
+  }
+  
+  const double adjusted_filter_cost = base_filter_cost * complexity_factor;
+  cost.cost_if_not_materialized = num_rows * adjusted_filter_cost;
+  cost.cost_if_materialized = num_rows * adjusted_filter_cost;
+  
   FindContainedSubqueries(
       thd, condition, outer_query_block,
       [thd, num_rows, &cost](const ContainedSubquery &subquery) {
@@ -171,7 +214,7 @@ void EstimateMaterializeCost(THD *thd, AccessPath *path) {
       }
     }
   }
-  path->cost += kMaterializeOneRowCost * path->num_output_rows;
+  path->cost += GetMaterializeOneRowCost(thd) * path->num_output_rows;
 
   if (table_path->type == AccessPath::TABLE_SCAN) {
     table_path->num_output_rows = path->num_output_rows;
@@ -217,7 +260,7 @@ void EstimateAggregateCost(AccessPath *path, const Query_block *query_block) {
       query_block->is_implicitly_grouped() ? 1.0 : child->num_output_rows;
   path->init_cost = child->init_cost;
   path->init_once_cost = child->init_once_cost;
-  path->cost = child->cost + kAggregateOneRowCost * child->num_output_rows;
+  path->cost = child->cost + GetAggregateOneRowCost() * child->num_output_rows;
   path->num_output_rows_before_filter = path->num_output_rows;
   path->cost_before_filter = path->cost;
   path->ordering_state = child->ordering_state;
@@ -235,7 +278,7 @@ void EstimateDeleteRowsCost(AccessPath *path) {
   // (buffered) deletes in the cost estimate.
   const table_map buffered_tables =
       param.tables_to_delete_from & ~param.immediate_tables;
-  path->cost = child->cost + kMaterializeOneRowCost *
+  path->cost = child->cost + GetMaterializeOneRowCost(nullptr) *
                                  PopulationCount(buffered_tables) *
                                  child->num_output_rows;
 }
@@ -252,7 +295,7 @@ void EstimateUpdateRowsCost(AccessPath *path) {
   // (buffered) updates in the cost estimate.
   const table_map buffered_tables =
       param.tables_to_update & ~param.immediate_tables;
-  path->cost = child->cost + kMaterializeOneRowCost *
+  path->cost = child->cost + GetMaterializeOneRowCost(nullptr) *
                                  PopulationCount(buffered_tables) *
                                  child->num_output_rows;
 }

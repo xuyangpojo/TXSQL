@@ -73,6 +73,13 @@ static double EstimateFieldSelectivity(Field *field, double *selectivity_cap,
                                        string *trace) {
   const TABLE *table = field->table;
   double selectivity = -1.0;
+  
+  // Optimization: Check if table has valid statistics
+  if (table->file->stats.records == 0) {
+    // No rows in table, selectivity is 0
+    return 0.0;
+  }
+  
   for (uint j = 0; j < table->s->keys; j++) {
     KEY *key = &table->key_info[j];
 
@@ -81,6 +88,7 @@ static double EstimateFieldSelectivity(Field *field, double *selectivity_cap,
         double field_selectivity =
             static_cast<double>(table->key_info[j].records_per_key(0)) /
             table->file->stats.records;
+        
         if (trace != nullptr) {
           *trace +=
               StringPrintf(" - found candidate index %s with selectivity %f\n",
@@ -104,13 +112,20 @@ static double EstimateFieldSelectivity(Field *field, double *selectivity_cap,
       const bool single_row = Overlaps(actual_key_flags(key), HA_NOSAME) &&
                               key->actual_key_parts == 1;
       if (single_row) {
+        // Optimization: For unique indexes, we can be more precise
+        // The selectivity is exactly 1/N where N is the number of rows
+        double unique_selectivity = 1.0 / table->file->stats.records;
         if (trace != nullptr) {
           *trace += StringPrintf(
               " - capping selectivity to %f since index is unique\n",
-              1.0 / table->file->stats.records);
+              unique_selectivity);
         }
-        *selectivity_cap =
-            std::min(*selectivity_cap, 1.0 / table->file->stats.records);
+        *selectivity_cap = std::min(*selectivity_cap, unique_selectivity);
+        
+        // For unique indexes, we can use the exact selectivity
+        if (selectivity < 0 || unique_selectivity < selectivity) {
+          selectivity = unique_selectivity;
+        }
       }
     }
   }
@@ -121,7 +136,14 @@ static double EstimateFieldSelectivity(Field *field, double *selectivity_cap,
     it is possible that selectivity is greater than 1.0 if
     rec_per_key is outdated. Force the filter to 1.0 in such
     cases.
+    
+    Optimization: Also ensure selectivity is not negative (which would
+    indicate no suitable index was found).
    */
+  if (selectivity < 0.0) {
+    // No suitable index found, return -1.0 to indicate failure
+    return -1.0;
+  }
   return std::min(selectivity, 1.0);
 }
 
