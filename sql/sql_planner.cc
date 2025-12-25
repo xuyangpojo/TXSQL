@@ -2072,18 +2072,90 @@ bool Optimize_table_order::choose_table_order() {
 uint Optimize_table_order::determine_search_depth(uint search_depth,
                                                   uint table_count) {
   if (search_depth > 0) return search_depth;
-  /* TODO: this value should be determined dynamically, based on statistics: */
+
   const uint max_tables_for_exhaustive_opt = 7;
 
-  if (table_count <= max_tables_for_exhaustive_opt)
-    search_depth =
-        table_count + 1;  // use exhaustive for small number of tables
-  else
-    /*
-      TODO: this value could be determined by some mapping of the form:
-      depth : table_count -> [max_tables_for_exhaustive_opt..MAX_EXHAUSTIVE]
-    */
-    search_depth = max_tables_for_exhaustive_opt;  // use greedy search
+  // 对于小数量表，仍然使用穷举搜索
+  if (table_count <= max_tables_for_exhaustive_opt) {
+    search_depth = table_count + 1;  // use exhaustive for small number of tables
+    return search_depth;
+  }
+
+  // === 自适应搜索深度优化 ===
+  // 根据表的平均大小动态调整搜索深度:
+  // - 小表(平均<10000行): 使用较大搜索深度，更彻底搜索
+  // - 中表(10000-100000行): 使用平衡策略
+  // - 大表(>100000行): 使用较小搜索深度，快速找到可行解
+
+  // 1. 计算所有表的平均行数
+  ha_rows total_rows = 0;
+  uint table_count_with_stats = 0;
+
+  for (uint idx = join->const_tables; idx < join->tables; ++idx) {
+    QEP_TAB *tab = join->best_ref[idx];
+    if (tab && tab->table() && tab->table()->file) {
+      ha_rows table_rows = tab->table()->file->stats.records;
+      // 只统计有有效统计信息的表
+      if (table_rows > 0) {
+        total_rows += table_rows;
+        table_count_with_stats++;
+      }
+    }
+  }
+
+  // 2. 根据平均表大小调整搜索深度
+  if (table_count_with_stats > 0) {
+    double avg_rows = static_cast<double>(total_rows) / table_count_with_stats;
+
+    // 小表策略：可以深度搜索
+    if (avg_rows < 10000) {
+      search_depth = std::min(table_count, max_tables_for_exhaustive_opt + 1);
+    }
+    // 中等表策略：平衡搜索深度和优化时间
+    else if (avg_rows < 100000) {
+      if (table_count <= 10) {
+        search_depth = max_tables_for_exhaustive_opt;
+      } else {
+        search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
+      }
+    }
+    // 大表策略：使用较小的搜索深度以减少优化时间
+    else {
+      if (table_count <= 10) {
+        search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
+      } else {
+        // 超大表查询，使用保守的搜索深度
+        search_depth = std::max(2u, static_cast<uint>(sqrt(table_count)));
+      }
+    }
+
+    // 添加优化追踪信息
+    if (join->thd->opt_trace) {
+      Opt_trace_object trace(join->thd->opt_trace, "adaptive_search_depth");
+      trace.add("table_count", table_count);
+      trace.add("tables_with_stats", table_count_with_stats);
+      trace.add("avg_table_rows", avg_rows);
+      trace.add("search_depth", search_depth);
+
+      const char *strategy =
+          avg_rows < 10000 ? "deep_search" :
+          avg_rows < 100000 ? "balanced_search" : "fast_search";
+      trace.add("strategy", strategy);
+    }
+  } else {
+    // 没有统计信息时，使用原来的默认策略
+    search_depth = max_tables_for_exhaustive_opt;
+
+    if (join->thd->opt_trace) {
+      Opt_trace_object trace(join->thd->opt_trace, "adaptive_search_depth");
+      trace.add("table_count", table_count);
+      trace.add("search_depth", search_depth);
+      trace.add("strategy", "default_no_stats");
+    }
+  }
+
+  // 3. 确保搜索深度在合理范围内
+  search_depth = std::max(2u, std::min(search_depth, table_count));
 
   return search_depth;
 }
