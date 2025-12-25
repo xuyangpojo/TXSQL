@@ -2125,7 +2125,12 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
         search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
       } else {
         // 超大表查询，使用保守的搜索深度
-        search_depth = std::max(2u, static_cast<uint>(sqrt(table_count)));
+        // 使用简单的启发式：深度约为表数量的平方根，但不小于2
+        uint estimated_depth = 2;
+        while (estimated_depth * estimated_depth < table_count) {
+          estimated_depth++;
+        }
+        search_depth = std::max(2u, estimated_depth);
       }
     }
 
