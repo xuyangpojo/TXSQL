@@ -2075,19 +2075,19 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
 
   const uint max_tables_for_exhaustive_opt = 7;
 
-  // 对于小数量表，仍然使用穷举搜索
+  // For small number of tables, still use exhaustive search
   if (table_count <= max_tables_for_exhaustive_opt) {
     search_depth = table_count + 1;  // use exhaustive for small number of tables
     return search_depth;
   }
 
-  // === 自适应搜索深度优化 ===
-  // 根据表的平均大小动态调整搜索深度:
-  // - 小表(平均<10000行): 使用较大搜索深度，更彻底搜索
-  // - 中表(10000-100000行): 使用平衡策略
-  // - 大表(>100000行): 使用较小搜索深度，快速找到可行解
+  // === Adaptive search depth optimization ===
+  // Dynamically adjust search depth based on average table size:
+  // - Small tables (avg < 10K rows): Use larger search depth for more thorough search
+  // - Medium tables (10K-100K rows): Use balanced strategy
+  // - Large tables (> 100K rows): Use smaller search depth for quick feasible solution
 
-  // 1. 计算所有表的平均行数
+  // 1. Calculate average row count for all tables
   ha_rows total_rows = 0;
   uint table_count_with_stats = 0;
 
@@ -2095,7 +2095,7 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
     QEP_TAB *tab = join->best_ref[idx];
     if (tab && tab->table() && tab->table()->file) {
       ha_rows table_rows = tab->table()->file->stats.records;
-      // 只统计有有效统计信息的表
+      // Only count tables with valid statistics
       if (table_rows > 0) {
         total_rows += table_rows;
         table_count_with_stats++;
@@ -2103,15 +2103,15 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
     }
   }
 
-  // 2. 根据平均表大小调整搜索深度
+  // 2. Adjust search depth based on average table size
   if (table_count_with_stats > 0) {
     double avg_rows = static_cast<double>(total_rows) / table_count_with_stats;
 
-    // 小表策略：可以深度搜索
+    // Small table strategy: Can afford deep search
     if (avg_rows < 10000) {
       search_depth = std::min(table_count, max_tables_for_exhaustive_opt + 1);
     }
-    // 中等表策略：平衡搜索深度和优化时间
+    // Medium table strategy: Balance search depth and optimization time
     else if (avg_rows < 100000) {
       if (table_count <= 10) {
         search_depth = max_tables_for_exhaustive_opt;
@@ -2119,13 +2119,13 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
         search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
       }
     }
-    // 大表策略：使用较小的搜索深度以减少优化时间
+    // Large table strategy: Use smaller search depth to reduce optimization time
     else {
       if (table_count <= 10) {
         search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
       } else {
-        // 超大表查询，使用保守的搜索深度
-        // 使用简单的启发式：深度约为表数量的平方根，但不小于2
+        // Very large table query, use conservative search depth
+        // Use simple heuristic: depth approx sqrt(table_count), but not less than 2
         uint estimated_depth = 2;
         while (estimated_depth * estimated_depth < table_count) {
           estimated_depth++;
@@ -2134,7 +2134,7 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
       }
     }
 
-    // 添加优化追踪信息
+    // Add optimization trace information
     if (join->thd->opt_trace) {
       Opt_trace_object trace(join->thd->opt_trace, "adaptive_search_depth");
       trace.add("table_count", table_count);
@@ -2148,7 +2148,7 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
       trace.add("strategy", strategy);
     }
   } else {
-    // 没有统计信息时，使用原来的默认策略
+    // When no statistics available, use original default strategy
     search_depth = max_tables_for_exhaustive_opt;
 
     if (join->thd->opt_trace) {
@@ -2159,7 +2159,7 @@ uint Optimize_table_order::determine_search_depth(uint search_depth,
     }
   }
 
-  // 3. 确保搜索深度在合理范围内
+  // 3. Ensure search depth is within reasonable range
   search_depth = std::max(2u, std::min(search_depth, table_count));
 
   return search_depth;
