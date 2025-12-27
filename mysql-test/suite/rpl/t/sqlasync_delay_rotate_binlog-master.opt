@@ -1,3 +1,0 @@
---thread-handling=pool-of-threads
---force-restart
---binlog-format=row

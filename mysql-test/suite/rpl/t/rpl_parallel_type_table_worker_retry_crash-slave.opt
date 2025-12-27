@@ -1,5 +1,0 @@
---slave-parallel-workers=2
---binlog-format=row
---slave-parallel-type=TABLE
---slave-transaction-retries=10
---replica_preserve_commit_order=OFF

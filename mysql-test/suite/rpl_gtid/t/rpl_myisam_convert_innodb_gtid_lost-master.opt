@@ -1,2 +1,0 @@
---gtid-mode=on --enforce-gtid-consistency --log-slave-updates --myisam_conversion_innodb=try
-

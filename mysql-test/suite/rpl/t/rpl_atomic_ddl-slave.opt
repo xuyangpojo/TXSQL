@@ -1,3 +1,0 @@
-$UDF_EXAMPLE_LIB_OPT
---relay_log_info_repository=TABLE --sync-source-info=1
-

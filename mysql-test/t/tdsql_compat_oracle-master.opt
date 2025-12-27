@@ -1,1 +1,0 @@
---tdsql_compat_oracle_mode=on --sql_mode=PIPES_AS_CONCAT --force-restart
