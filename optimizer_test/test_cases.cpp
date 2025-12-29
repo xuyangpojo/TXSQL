@@ -1,12 +1,3 @@
-/**
- * SQL优化器测试用例
- * 
- * 包含各种测试场景：
- * 1. 单表查询（索引选择）
- * 2. 两表连接（连接顺序优化）
- * 3. 多表连接（复杂场景）
- */
-
 #include "optimizer.h"
 #include <iostream>
 #include <iomanip>
@@ -15,29 +6,49 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <windows.h>
 
-// ==================== Table Formatting Utilities ====================
+namespace Color {
+    const std::string RESET = "\033[0m";
+    const std::string RED = "\033[31m";
+    const std::string GREEN = "\033[32m";
+    const std::string YELLOW = "\033[33m";
+    const std::string BLUE = "\033[34m";
+    const std::string MAGENTA = "\033[35m";
+    const std::string CYAN = "\033[36m";
+    const std::string WHITE = "\033[37m";
+    const std::string BOLD = "\033[1m";
+    
+    void init() {
+        SetConsoleOutputCP(65001);
+        SetConsoleCP(65001);
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD dwMode = 0;
+        GetConsoleMode(hOut, &dwMode);
+        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hOut, dwMode);
+    }
+}
 
-// Print horizontal line
 void print_line(int width = 80, char ch = '-') {
     std::cout << std::string(width, ch) << "\n";
 }
 
-// Print header with border
 void print_header(const std::string& title, int width = 80) {
     std::cout << "\n";
+    std::cout << Color::CYAN << Color::BOLD;
     print_line(width, '=');
     std::cout << "  " << title << "\n";
     print_line(width, '=');
+    std::cout << Color::RESET;
 }
 
-// Print table header
 void print_table_header(const std::vector<std::string>& headers, const std::vector<int>& widths) {
-    std::cout << "|";
+    std::cout << Color::YELLOW << "|";
     for (size_t i = 0; i < headers.size(); ++i) {
         std::cout << " " << std::left << std::setw(widths[i]) << headers[i] << " |";
     }
-    std::cout << "\n";
+    std::cout << Color::RESET << "\n";
     
     std::cout << "|";
     for (size_t i = 0; i < headers.size(); ++i) {
@@ -46,7 +57,6 @@ void print_table_header(const std::vector<std::string>& headers, const std::vect
     std::cout << "\n";
 }
 
-// Print table row
 void print_table_row(const std::vector<std::string>& values, const std::vector<int>& widths) {
     std::cout << "|";
     for (size_t i = 0; i < values.size(); ++i) {
@@ -55,7 +65,6 @@ void print_table_row(const std::vector<std::string>& values, const std::vector<i
     std::cout << "\n";
 }
 
-// Format number with commas
 std::string format_number(size_t num) {
     std::stringstream ss;
     ss << num;
@@ -66,7 +75,6 @@ std::string format_number(size_t num) {
     return s;
 }
 
-// Format large number with K/M suffix
 std::string format_large_number(size_t num) {
     if (num >= 1000000) {
         double m = num / 1000000.0;
@@ -82,11 +90,10 @@ std::string format_large_number(size_t num) {
     return std::to_string(num);
 }
 
-// Print table statistics in table format
 void print_table_stats(const std::map<std::string, TableStats>& tables) {
-    print_header("Table Statistics", 80);
+    print_header("表统计信息", 80);
     
-    std::vector<std::string> headers = {"Table", "Rows", "Row Size", "Memory %", "Cardinality"};
+    std::vector<std::string> headers = {"表名", "行数", "行大小", "内存占比", "基数"};
     std::vector<int> widths = {15, 12, 10, 12, 20};
     print_table_header(headers, widths);
     
@@ -99,13 +106,13 @@ void print_table_stats(const std::map<std::string, TableStats>& tables) {
                 cardinality_str += col.first + ":" + format_number(col.second);
             }
         } else {
-            cardinality_str = "N/A";
+            cardinality_str = "无";
         }
         
         std::vector<std::string> row = {
             table.name,
             format_large_number(table.row_count),
-            std::to_string(table.avg_row_size) + " B",
+            std::to_string(table.avg_row_size) + " 字节",
             std::to_string(static_cast<int>(table.pages_in_memory * 100)) + "%",
             cardinality_str
         };
@@ -114,24 +121,23 @@ void print_table_stats(const std::map<std::string, TableStats>& tables) {
     print_line(80);
 }
 
-// Print index information in table format
 void print_index_info(const std::map<std::string, std::vector<IndexStats>>& indexes) {
     if (indexes.empty()) {
-        print_header("Index Information: None", 80);
+        print_header("索引信息: 无", 80);
         return;
     }
     
-    print_header("Index Information", 80);
+    print_header("索引信息", 80);
     
-    std::vector<std::string> headers = {"Table", "Index Name", "Type", "Columns", "Selectivity", "Memory %"};
+    std::vector<std::string> headers = {"表名", "索引名", "类型", "列名", "选择性", "内存占比"};
     std::vector<int> widths = {12, 18, 10, 20, 12, 10};
     print_table_header(headers, widths);
     
     for (const auto& pair : indexes) {
         for (const auto& idx : pair.second) {
-            std::string type = "NORMAL";
-            if (idx.is_primary) type = "PRIMARY";
-            else if (idx.is_unique) type = "UNIQUE";
+            std::string type = "普通";
+            if (idx.is_primary) type = "主键";
+            else if (idx.is_unique) type = "唯一";
             
             std::string columns_str = "";
             for (size_t i = 0; i < idx.columns.size(); ++i) {
@@ -156,16 +162,15 @@ void print_index_info(const std::map<std::string, std::vector<IndexStats>>& inde
     print_line(80);
 }
 
-// Print query conditions in table format
 void print_query_conditions(const std::vector<QueryCondition>& conditions) {
     if (conditions.empty()) {
-        print_header("Query Conditions: None", 80);
+        print_header("查询条件: 无", 80);
         return;
     }
     
-    print_header("Query Conditions", 80);
+    print_header("查询条件", 80);
     
-    std::vector<std::string> headers = {"Table", "Column", "Operator", "Selectivity"};
+    std::vector<std::string> headers = {"表名", "列名", "操作符", "选择性"};
     std::vector<int> widths = {15, 20, 12, 15};
     print_table_header(headers, widths);
     
@@ -184,16 +189,15 @@ void print_query_conditions(const std::vector<QueryCondition>& conditions) {
     print_line(80);
 }
 
-// Print join conditions in table format
 void print_join_conditions(const std::vector<JoinCondition>& joins) {
     if (joins.empty()) {
-        print_header("Join Conditions: None", 80);
+        print_header("连接条件: 无", 80);
         return;
     }
     
-    print_header("Join Conditions", 80);
+    print_header("连接条件", 80);
     
-    std::vector<std::string> headers = {"Left Table.Column", "Right Table.Column", "Selectivity"};
+    std::vector<std::string> headers = {"左表.列", "右表.列", "选择性"};
     std::vector<int> widths = {25, 25, 15};
     print_table_header(headers, widths);
     
@@ -211,7 +215,6 @@ void print_join_conditions(const std::vector<JoinCondition>& joins) {
     print_line(80);
 }
 
-// 运行单个测试用例
 void run_test_case(const std::string& test_name,
                   const std::map<std::string, TableStats>& tables,
                   const std::map<std::string, std::vector<IndexStats>>& indexes,
@@ -221,14 +224,8 @@ void run_test_case(const std::string& test_name,
                   PerformanceCollector& collector,
                   bool verbose = true) {
     
-    print_header(test_name, 80);
-    
-    if (verbose) {
-        print_table_stats(tables);
-        print_index_info(indexes);
-        print_query_conditions(conditions);
-        print_join_conditions(joins);
-    }
+    std::cout << "\n" << std::string(80, '-') << "\n";
+    std::cout << Color::CYAN << Color::BOLD << test_name << Color::RESET << "\n";
     
     auto start = std::chrono::high_resolution_clock::now();
     
@@ -239,83 +236,35 @@ void run_test_case(const std::string& test_name,
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     double time_ms = duration.count() / 1000.0;
     
-    // Print execution plan in table format
-    print_header("Execution Plan", 80);
-    
-    // Summary box
-    std::cout << "\n";
-    std::cout << "+" << std::string(78, '-') << "+\n";
-    std::cout << "| " << std::left << std::setw(20) << "Total Cost:" 
-              << std::right << std::setw(55) << std::fixed << std::setprecision(2) 
-              << plan.total_cost << " |\n";
-    std::cout << "| " << std::left << std::setw(20) << "Join Type:" 
-              << std::right << std::setw(55) << plan.join_type << " |\n";
-    std::cout << "| " << std::left << std::setw(20) << "Optimization Time:" 
-              << std::right << std::setw(55) << std::fixed << std::setprecision(3) 
-              << time_ms << " ms |\n";
-    std::cout << "+" << std::string(78, '-') << "+\n";
-    
-    // Execution steps table
-    std::cout << "\n";
-    std::vector<std::string> headers = {"Step", "Table", "Access Method", "Rows", "Step Cost", "Cumulative Cost"};
-    std::vector<int> widths = {6, 15, 25, 12, 12, 15};
-    print_table_header(headers, widths);
-    
     size_t total_rows = 0;
     size_t indexes_used = 0;
-    double cumulative_cost = 0.0;
+    
+    std::cout << "执行计划: ";
     for (size_t i = 0; i < plan.table_order.size(); ++i) {
+        if (i > 0) std::cout << " -> ";
         if (i < plan.access_paths.size()) {
             const auto& path = plan.access_paths[i];
-            cumulative_cost += path.total_cost;
-            
-            std::stringstream ss_rows, ss_step_cost, ss_cum_cost;
-            ss_rows << format_large_number(path.estimated_rows);
-            ss_step_cost << std::fixed << std::setprecision(2) << path.total_cost;
-            ss_cum_cost << std::fixed << std::setprecision(2) << cumulative_cost;
-            
-            std::vector<std::string> row = {
-                std::to_string(i + 1),
-                plan.table_order[i],
-                path.description,
-                ss_rows.str(),
-                ss_step_cost.str(),
-                ss_cum_cost.str()
-            };
-            print_table_row(row, widths);
-            
             total_rows += path.estimated_rows;
             if (path.access_type != "TABLE_SCAN") indexes_used++;
+            
+            std::string access_desc = path.description;
+            if (path.access_type == "TABLE_SCAN") {
+                std::cout << Color::RED << plan.table_order[i] << "(全表扫描)" << Color::RESET;
+            } else {
+                std::cout << Color::GREEN << plan.table_order[i] << "(" << access_desc << ")" << Color::RESET;
+            }
+        } else {
+            std::cout << plan.table_order[i];
         }
     }
-    print_line(80);
-    
-    // Summary table
     std::cout << "\n";
-    std::vector<std::string> summary_headers = {"Metric", "Value"};
-    std::vector<int> summary_widths = {25, 50};
-    print_table_header(summary_headers, summary_widths);
     
-    std::stringstream ss_total_rows, ss_cost_per_row;
-    ss_total_rows << format_large_number(total_rows) 
-                  << " (" << std::fixed << std::setprecision(2) 
-                  << (total_rows / 1000000.0) << "M)";
-    ss_cost_per_row << std::fixed << std::setprecision(6) 
-                    << (plan.total_cost / total_rows);
+    std::cout << "总成本: " << Color::YELLOW << std::fixed << std::setprecision(2) << plan.total_cost 
+              << Color::RESET << " | "
+              << "估计行数: " << format_large_number(total_rows) << " | "
+              << "索引使用: " << indexes_used << "/" << plan.access_paths.size() << " | "
+              << "耗时: " << std::fixed << std::setprecision(3) << time_ms << "ms\n";
     
-    std::vector<std::string> summary_row1 = {"Total Estimated Rows", ss_total_rows.str()};
-    std::vector<std::string> summary_row2 = {
-        "Indexes Used", 
-        std::to_string(indexes_used) + " / " + std::to_string(plan.access_paths.size())
-    };
-    std::vector<std::string> summary_row3 = {"Cost per Row", ss_cost_per_row.str()};
-    
-    print_table_row(summary_row1, summary_widths);
-    print_table_row(summary_row2, summary_widths);
-    print_table_row(summary_row3, summary_widths);
-    print_line(80);
-    
-    // 记录性能指标
     PerformanceMetrics metrics;
     metrics.optimization_time_ms = time_ms;
     metrics.total_cost = plan.total_cost;
@@ -325,17 +274,16 @@ void run_test_case(const std::string& test_name,
     collector.record(metrics);
 }
 
-// ==================== 测试用例定义 ====================
-
 void test_single_table_query(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT * FROM orders WHERE customer_id = 12345\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT * FROM orders WHERE customer_id = 12345\n";
     
     std::map<std::string, TableStats> tables;
     TableStats orders;
     orders.name = "orders";
     orders.row_count = 1000000;
     orders.avg_row_size = 200;
-    orders.pages_in_memory = 0.3;  // 30%在内存
+    orders.pages_in_memory = 0.3;
     orders.column_cardinality["customer_id"] = 50000;
     tables["orders"] = orders;
     
@@ -357,14 +305,15 @@ void test_single_table_query(CostModel& cost_model, PerformanceCollector& collec
     cond.selectivity = 1.0 / 50000.0;
     conditions.push_back(cond);
     
-    run_test_case("Test 1: Single Table Query (Index vs Table Scan)",
+    run_test_case("测试 1: 单表查询 (索引 vs 全表扫描)",
                  tables, indexes, conditions, {}, cost_model, collector, true);
 }
 
 void test_two_table_join(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT o.order_id, c.customer_name\n";
-    std::cout << "     FROM orders o JOIN customers c ON o.customer_id = c.customer_id\n";
-    std::cout << "     WHERE o.order_date > '2023-01-01'\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT o.order_id, c.customer_name\n"
+              << "     FROM orders o JOIN customers c ON o.customer_id = c.customer_id\n"
+              << "     WHERE o.order_date > '2023-01-01'\n";
     
     std::map<std::string, TableStats> tables;
     
@@ -379,7 +328,7 @@ void test_two_table_join(CostModel& cost_model, PerformanceCollector& collector)
     customers.name = "customers";
     customers.row_count = 50000;
     customers.avg_row_size = 150;
-    customers.pages_in_memory = 0.8;  // 客户表更可能在内存
+    customers.pages_in_memory = 0.8;
     tables["customers"] = customers;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
@@ -416,71 +365,82 @@ void test_two_table_join(CostModel& cost_model, PerformanceCollector& collector)
     join.selectivity = 1.0;
     joins.push_back(join);
     
-    run_test_case("Test 2: Two Table Join (Testing Join Order)",
+    run_test_case("测试 2: 两表连接 (测试连接顺序)",
                  tables, indexes, conditions, joins, cost_model, collector, true);
 }
 
 void test_multi_table_join(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT o.order_id, c.customer_name, p.product_name\n";
-    std::cout << "     FROM orders o\n";
-    std::cout << "     JOIN customers c ON o.customer_id = c.customer_id\n";
-    std::cout << "     JOIN order_items oi ON o.order_id = oi.order_id\n";
-    std::cout << "     JOIN products p ON oi.product_id = p.product_id\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT o.order_id, c.customer_name, p.product_name\n"
+              << "     FROM orders o\n"
+              << "     JOIN customers c ON o.customer_id = c.customer_id\n"
+              << "     JOIN order_items oi ON o.order_id = oi.order_id\n"
+              << "     JOIN products p ON oi.product_id = p.product_id\n";
     
     std::map<std::string, TableStats> tables;
     
     TableStats orders;
     orders.name = "orders";
     orders.row_count = 1000000;
+    orders.avg_row_size = 200;
     orders.pages_in_memory = 0.3;
     tables["orders"] = orders;
     
     TableStats customers;
     customers.name = "customers";
     customers.row_count = 50000;
+    customers.avg_row_size = 150;
     customers.pages_in_memory = 0.8;
     tables["customers"] = customers;
     
     TableStats order_items;
     order_items.name = "order_items";
     order_items.row_count = 5000000;
+    order_items.avg_row_size = 50;
     order_items.pages_in_memory = 0.2;
     tables["order_items"] = order_items;
     
     TableStats products;
     products.name = "products";
     products.row_count = 10000;
+    products.avg_row_size = 200;
     products.pages_in_memory = 0.9;
     tables["products"] = products;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
-    // 简化：假设所有表都有主键索引
     
     std::vector<JoinCondition> joins;
     JoinCondition j1;
     j1.left_table = "orders";
+    j1.left_column = "customer_id";
     j1.right_table = "customers";
+    j1.right_column = "customer_id";
     j1.selectivity = 1.0;
     joins.push_back(j1);
     
     JoinCondition j2;
     j2.left_table = "orders";
+    j2.left_column = "order_id";
     j2.right_table = "order_items";
+    j2.right_column = "order_id";
     j2.selectivity = 1.0;
     joins.push_back(j2);
     
     JoinCondition j3;
     j3.left_table = "order_items";
+    j3.left_column = "product_id";
     j3.right_table = "products";
+    j3.right_column = "product_id";
     j3.selectivity = 1.0;
     joins.push_back(j3);
     
-    run_test_case("Test 3: Multi-Table Join (4 Tables)",
+    run_test_case("测试 3: 多表连接 (4个表)",
                  tables, indexes, {}, joins, cost_model, collector, true);
 }
 
 void test_range_query(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT * FROM orders WHERE order_date BETWEEN '2023-01-01' AND '2023-12-31'\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT * FROM orders WHERE order_date BETWEEN '2023-01-01' AND '2023-12-31'\n";
     
     std::map<std::string, TableStats> tables;
     TableStats orders;
@@ -488,7 +448,7 @@ void test_range_query(CostModel& cost_model, PerformanceCollector& collector) {
     orders.row_count = 1000000;
     orders.avg_row_size = 200;
     orders.pages_in_memory = 0.3;
-    orders.column_cardinality["order_date"] = 365;  // Days in a year
+    orders.column_cardinality["order_date"] = 365;
     tables["orders"] = orders;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
@@ -498,7 +458,7 @@ void test_range_query(CostModel& cost_model, PerformanceCollector& collector) {
     idx_date.columns = {"order_date"};
     idx_date.is_unique = false;
     idx_date.pages_in_memory = 0.4;
-    idx_date.selectivity = 1.0 / 365.0;  // One day selectivity
+    idx_date.selectivity = 1.0 / 365.0;
     indexes["orders"] = {idx_date};
     
     std::vector<QueryCondition> conditions;
@@ -506,15 +466,16 @@ void test_range_query(CostModel& cost_model, PerformanceCollector& collector) {
     cond.table_name = "orders";
     cond.column_name = "order_date";
     cond.op = "BETWEEN";
-    cond.selectivity = 365.0 / 1000000.0;  // Full year range
+    cond.selectivity = 365.0 / 1000000.0;
     conditions.push_back(cond);
     
-    run_test_case("Test 4: Range Query (Date Range)",
+    run_test_case("测试 4: 范围查询 (日期范围)",
                  tables, indexes, conditions, {}, cost_model, collector, true);
 }
 
 void test_multiple_indexes(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT * FROM orders WHERE customer_id = 12345 AND status = 'shipped'\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT * FROM orders WHERE customer_id = 12345 AND status = 'shipped'\n";
     
     std::map<std::string, TableStats> tables;
     TableStats orders;
@@ -523,7 +484,7 @@ void test_multiple_indexes(CostModel& cost_model, PerformanceCollector& collecto
     orders.avg_row_size = 200;
     orders.pages_in_memory = 0.3;
     orders.column_cardinality["customer_id"] = 50000;
-    orders.column_cardinality["status"] = 4;  // 4 status values
+    orders.column_cardinality["status"] = 4;
     tables["orders"] = orders;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
@@ -561,27 +522,28 @@ void test_multiple_indexes(CostModel& cost_model, PerformanceCollector& collecto
     cond2.selectivity = 1.0 / 4.0;
     conditions.push_back(cond2);
     
-    run_test_case("Test 5: Multiple Indexes (Best Index Selection)",
+    run_test_case("测试 5: 多索引选择 (最佳索引选择)",
                  tables, indexes, conditions, {}, cost_model, collector, true);
 }
 
 void test_large_table_join(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT * FROM large_table l JOIN small_table s ON l.id = s.id\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT * FROM large_table l JOIN small_table s ON l.id = s.id\n";
     
     std::map<std::string, TableStats> tables;
     
     TableStats large_table;
     large_table.name = "large_table";
-    large_table.row_count = 10000000;  // 10M rows
+    large_table.row_count = 10000000;
     large_table.avg_row_size = 500;
-    large_table.pages_in_memory = 0.1;  // Mostly on disk
+    large_table.pages_in_memory = 0.1;
     tables["large_table"] = large_table;
     
     TableStats small_table;
     small_table.name = "small_table";
-    small_table.row_count = 1000;  // 1K rows
+    small_table.row_count = 1000;
     small_table.avg_row_size = 100;
-    small_table.pages_in_memory = 0.95;  // Mostly in memory
+    small_table.pages_in_memory = 0.95;
     tables["small_table"] = small_table;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
@@ -613,16 +575,17 @@ void test_large_table_join(CostModel& cost_model, PerformanceCollector& collecto
     join.selectivity = 1.0;
     joins.push_back(join);
     
-    run_test_case("Test 6: Large-Small Table Join (Size Difference)",
+    run_test_case("测试 6: 大小表连接 (表大小差异)",
                  tables, indexes, {}, joins, cost_model, collector, true);
 }
 
 void test_complex_query(CostModel& cost_model, PerformanceCollector& collector) {
-    std::cout << "\nSQL: SELECT c.name, COUNT(o.id), SUM(o.amount)\n";
-    std::cout << "     FROM customers c\n";
-    std::cout << "     JOIN orders o ON c.id = o.customer_id\n";
-    std::cout << "     WHERE o.date > '2023-01-01' AND c.country = 'US'\n";
-    std::cout << "     GROUP BY c.id\n";
+    std::cout << Color::BLUE << "SQL: " << Color::RESET 
+              << "SELECT c.name, COUNT(o.id), SUM(o.amount)\n"
+              << "     FROM customers c\n"
+              << "     JOIN orders o ON c.id = o.customer_id\n"
+              << "     WHERE o.date > '2023-01-01' AND c.country = 'US'\n"
+              << "     GROUP BY c.id\n";
     
     std::map<std::string, TableStats> tables;
     
@@ -636,11 +599,11 @@ void test_complex_query(CostModel& cost_model, PerformanceCollector& collector) 
     
     TableStats orders;
     orders.name = "orders";
-    orders.row_count = 5000000;  // 5M orders
+    orders.row_count = 5000000;
     orders.avg_row_size = 200;
     orders.pages_in_memory = 0.2;
     orders.column_cardinality["customer_id"] = 100000;
-    orders.column_cardinality["date"] = 1825;  // 5 years
+    orders.column_cardinality["date"] = 1825;
     tables["orders"] = orders;
     
     std::map<std::string, std::vector<IndexStats>> indexes;
@@ -677,14 +640,14 @@ void test_complex_query(CostModel& cost_model, PerformanceCollector& collector) 
     cond1.table_name = "orders";
     cond1.column_name = "date";
     cond1.op = ">";
-    cond1.selectivity = 0.4;  // 40% of orders after 2023-01-01
+    cond1.selectivity = 0.4;
     conditions.push_back(cond1);
     
     QueryCondition cond2;
     cond2.table_name = "customers";
     cond2.column_name = "country";
     cond2.op = "=";
-    cond2.selectivity = 1.0 / 50.0;  // US customers
+    cond2.selectivity = 1.0 / 50.0;
     conditions.push_back(cond2);
     
     std::vector<JoinCondition> joins;
@@ -696,26 +659,24 @@ void test_complex_query(CostModel& cost_model, PerformanceCollector& collector) 
     join.selectivity = 1.0;
     joins.push_back(join);
     
-    run_test_case("Test 7: Complex Query (Multiple Conditions + Join)",
+    run_test_case("测试 7: 复杂查询 (多条件 + 连接)",
                  tables, indexes, conditions, joins, cost_model, collector, true);
 }
 
-// ==================== 主函数 ====================
-
 int main() {
+    Color::init();
+    
     std::cout << "\n";
+    std::cout << Color::CYAN << Color::BOLD;
     std::cout << "================================================================================\n";
-    std::cout << "                    SQL OPTIMIZER TEST PROGRAM\n";
-    std::cout << "              Based on TXSQL Optimizer Core Algorithm\n";
+    std::cout << "                    SQL 优化器测试程序\n";
+    std::cout << "              基于 TXSQL 优化器核心算法\n";
     std::cout << "================================================================================\n";
+    std::cout << Color::RESET;
     
-    // 创建成本模型
     CostModel cost_model;
-    
-    // 性能收集器
     PerformanceCollector collector;
     
-    // Run test cases
     test_single_table_query(cost_model, collector);
     test_two_table_join(cost_model, collector);
     test_multi_table_join(cost_model, collector);
@@ -724,18 +685,17 @@ int main() {
     test_large_table_join(cost_model, collector);
     test_complex_query(cost_model, collector);
     
-    // 打印性能统计
     collector.print_summary();
-    
-    // 保存性能数据
     collector.save_to_file("optimizer_performance.csv");
     
-    std::cout << "\n========== Test Completed ==========\n";
-    std::cout << "Notes:\n";
-    std::cout << "1. Lower cost values are better\n";
-    std::cout << "2. Optimizer selects the execution plan with lowest cost\n";
-    std::cout << "3. Index access is usually cheaper than table scan\n";
-    std::cout << "4. Join order affects total cost\n";
+    std::cout << "\n" << Color::GREEN << Color::BOLD;
+    std::cout << "========== 测试完成 ==========\n";
+    std::cout << Color::RESET;
+    std::cout << Color::YELLOW << "说明:\n";
+    std::cout << "1. 成本值越低越好\n";
+    std::cout << "2. 优化器选择成本最低的执行计划\n";
+    std::cout << "3. 索引访问通常比全表扫描更便宜\n";
+    std::cout << "4. 连接顺序影响总成本\n" << Color::RESET;
     
     return 0;
 }

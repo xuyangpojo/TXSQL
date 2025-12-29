@@ -1,8 +1,3 @@
-/**
- * 测试数据生成器
- * 生成用于测试SQL优化器的模拟数据
- */
-
 #include <iostream>
 #include <fstream>
 #include <random>
@@ -16,7 +11,6 @@ class TestDataGenerator {
 private:
     std::mt19937 rng_;
     
-    // 生成随机字符串
     std::string random_string(size_t length) {
         const std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         std::uniform_int_distribution<> dist(0, chars.size() - 1);
@@ -27,7 +21,6 @@ private:
         return result;
     }
     
-    // 生成随机日期
     std::string random_date() {
         std::uniform_int_distribution<> year_dist(2020, 2024);
         std::uniform_int_distribution<> month_dist(1, 12);
@@ -46,7 +39,6 @@ private:
 public:
     TestDataGenerator(unsigned int seed = std::time(nullptr)) : rng_(seed) {}
     
-    // 生成customers表数据
     void generate_customers(size_t count, const std::string& filename) {
         std::ofstream file(filename);
         if (!file.is_open()) {
@@ -70,7 +62,6 @@ public:
         std::cout << "生成 " << count << " 条customers数据到 " << filename << "\n";
     }
     
-    // 生成orders表数据
     void generate_orders(size_t count, size_t customer_count, const std::string& filename) {
         std::ofstream file(filename);
         if (!file.is_open()) {
@@ -97,7 +88,6 @@ public:
         std::cout << "生成 " << count << " 条orders数据到 " << filename << "\n";
     }
     
-    // 生成products表数据
     void generate_products(size_t count, const std::string& filename) {
         std::ofstream file(filename);
         if (!file.is_open()) {
@@ -121,7 +111,6 @@ public:
         std::cout << "生成 " << count << " 条products数据到 " << filename << "\n";
     }
     
-    // 生成order_items表数据
     void generate_order_items(size_t count, size_t order_count, size_t product_count, 
                              const std::string& filename) {
         std::ofstream file(filename);
@@ -149,7 +138,6 @@ public:
         std::cout << "生成 " << count << " 条order_items数据到 " << filename << "\n";
     }
     
-    // 生成统计信息文件（用于优化器）
     void generate_statistics(const std::string& filename) {
         std::ofstream file(filename);
         if (!file.is_open()) {
@@ -183,7 +171,6 @@ public:
         std::cout << "生成统计信息到 " << filename << "\n";
     }
     
-    // 生成测试查询SQL
     void generate_test_queries(const std::string& filename) {
         std::ofstream file(filename);
         if (!file.is_open()) {
@@ -249,14 +236,12 @@ int main(int argc, char* argv[]) {
     
     TestDataGenerator generator;
     
-    // 生成数据
     size_t customer_count = 50000;
     size_t order_count = 1000000;
     size_t product_count = 10000;
     size_t order_item_count = 5000000;
     
     if (argc > 1) {
-        // 可以指定数据规模
         customer_count = std::stoul(argv[1]);
         order_count = std::stoul(argv[2]);
         product_count = std::stoul(argv[3]);
