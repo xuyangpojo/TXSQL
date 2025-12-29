@@ -2072,18 +2072,95 @@ bool Optimize_table_order::choose_table_order() {
 uint Optimize_table_order::determine_search_depth(uint search_depth,
                                                   uint table_count) {
   if (search_depth > 0) return search_depth;
-  /* TODO: this value should be determined dynamically, based on statistics: */
+
   const uint max_tables_for_exhaustive_opt = 7;
 
-  if (table_count <= max_tables_for_exhaustive_opt)
-    search_depth =
-        table_count + 1;  // use exhaustive for small number of tables
-  else
-    /*
-      TODO: this value could be determined by some mapping of the form:
-      depth : table_count -> [max_tables_for_exhaustive_opt..MAX_EXHAUSTIVE]
-    */
-    search_depth = max_tables_for_exhaustive_opt;  // use greedy search
+  // For small number of tables, still use exhaustive search
+  if (table_count <= max_tables_for_exhaustive_opt) {
+    search_depth = table_count + 1;  // use exhaustive for small number of tables
+    return search_depth;
+  }
+
+  // === Adaptive search depth optimization ===
+  // Dynamically adjust search depth based on average table size:
+  // - Small tables (avg < 10K rows): Use larger search depth for more thorough search
+  // - Medium tables (10K-100K rows): Use balanced strategy
+  // - Large tables (> 100K rows): Use smaller search depth for quick feasible solution
+
+  // 1. Calculate average row count for all tables
+  ha_rows total_rows = 0;
+  uint table_count_with_stats = 0;
+
+  for (uint idx = join->const_tables; idx < join->tables; ++idx) {
+    QEP_TAB *tab = join->best_ref[idx];
+    if (tab && tab->table() && tab->table()->file) {
+      ha_rows table_rows = tab->table()->file->stats.records;
+      // Only count tables with valid statistics
+      if (table_rows > 0) {
+        total_rows += table_rows;
+        table_count_with_stats++;
+      }
+    }
+  }
+
+  // 2. Adjust search depth based on average table size
+  if (table_count_with_stats > 0) {
+    double avg_rows = static_cast<double>(total_rows) / table_count_with_stats;
+
+    // Small table strategy: Can afford deep search
+    if (avg_rows < 10000) {
+      search_depth = std::min(table_count, max_tables_for_exhaustive_opt + 1);
+    }
+    // Medium table strategy: Balance search depth and optimization time
+    else if (avg_rows < 100000) {
+      if (table_count <= 10) {
+        search_depth = max_tables_for_exhaustive_opt;
+      } else {
+        search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
+      }
+    }
+    // Large table strategy: Use smaller search depth to reduce optimization time
+    else {
+      if (table_count <= 10) {
+        search_depth = std::max(3u, max_tables_for_exhaustive_opt - 1);
+      } else {
+        // Very large table query, use conservative search depth
+        // Use simple heuristic: depth approx sqrt(table_count), but not less than 2
+        uint estimated_depth = 2;
+        while (estimated_depth * estimated_depth < table_count) {
+          estimated_depth++;
+        }
+        search_depth = std::max(2u, estimated_depth);
+      }
+    }
+
+    // Add optimization trace information
+    if (join->thd->opt_trace) {
+      Opt_trace_object trace(join->thd->opt_trace, "adaptive_search_depth");
+      trace.add("table_count", table_count);
+      trace.add("tables_with_stats", table_count_with_stats);
+      trace.add("avg_table_rows", avg_rows);
+      trace.add("search_depth", search_depth);
+
+      const char *strategy =
+          avg_rows < 10000 ? "deep_search" :
+          avg_rows < 100000 ? "balanced_search" : "fast_search";
+      trace.add("strategy", strategy);
+    }
+  } else {
+    // When no statistics available, use original default strategy
+    search_depth = max_tables_for_exhaustive_opt;
+
+    if (join->thd->opt_trace) {
+      Opt_trace_object trace(join->thd->opt_trace, "adaptive_search_depth");
+      trace.add("table_count", table_count);
+      trace.add("search_depth", search_depth);
+      trace.add("strategy", "default_no_stats");
+    }
+  }
+
+  // 3. Ensure search depth is within reasonable range
+  search_depth = std::max(2u, std::min(search_depth, table_count));
 
   return search_depth;
 }
