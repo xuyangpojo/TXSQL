@@ -23,11 +23,9 @@ echo.
 echo [1/3] Generating CMake build files...
 echo.
 
-REM Try to find g++ compiler first (MinGW)
 where g++ >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     echo Using MinGW (g++) compiler...
-    REM Clear CMake cache if it exists to avoid conflicts
     if exist CMakeCache.txt del /Q CMakeCache.txt >nul 2>&1
     if exist CMakeFiles rmdir /S /Q CMakeFiles >nul 2>&1
     cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ .. || (
@@ -36,7 +34,6 @@ if %ERRORLEVEL% EQU 0 (
         goto :direct_compile
     )
 ) else (
-    REM Try Visual Studio or default generator
     if exist CMakeCache.txt del /Q CMakeCache.txt >nul 2>&1
     if exist CMakeFiles rmdir /S /Q CMakeFiles >nul 2>&1
     cmake .. || (
@@ -79,7 +76,6 @@ echo.
 echo Using direct compilation method...
 echo.
 
-REM Check if g++ is available
 where g++ >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo Error: g++ compiler not found!
